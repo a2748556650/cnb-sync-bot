@@ -1,8 +1,5 @@
 name: Auto Sync SeerAPI to CNB
 
-# 触发条件：
-# 1. 定时触发：每4小时一次 (UTC时间)
-# 2. 手动触发：点击按钮立即运行
 on:
   schedule:
     - cron: '0 */4 * * *'
@@ -18,13 +15,17 @@ jobs:
       - name: Sync config-sources
         run: |
           echo "正在同步 config-sources..."
-          # 1. 克隆源仓库 (镜像模式)
+          # 1. 下载源仓库所有信息
           git clone --mirror https://github.com/SeerAPI/config-sources.git repo1
           cd repo1
-          # 2. 设置 CNB 目标地址
+          
+          # 2. 设置 CNB 目标
           git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
-          # 3. 强制推送
-          git push cnb --mirror
+          
+          # 3. 【修复点】只推送分支和标签，忽略 Pull Request
+          git push cnb "refs/heads/*:refs/heads/*" --force
+          git push cnb "refs/tags/*:refs/tags/*" --force
+          
           # 4. 清理
           cd ..
           rm -rf repo1
@@ -39,7 +40,11 @@ jobs:
           git clone --mirror https://github.com/SeerAPI/seer-unity-assets.git repo2
           cd repo2
           git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
-          git push cnb --mirror
+          
+          # 【修复点】
+          git push cnb "refs/heads/*:refs/heads/*" --force
+          git push cnb "refs/tags/*:refs/tags/*" --force
+          
           cd ..
           rm -rf repo2
           echo "seer-unity-assets 同步完成 ✅"
@@ -53,7 +58,11 @@ jobs:
           git clone --mirror https://github.com/SeerAPI/api-data.git repo3
           cd repo3
           git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
-          git push cnb --mirror
+          
+          # 【修复点】
+          git push cnb "refs/heads/*:refs/heads/*" --force
+          git push cnb "refs/tags/*:refs/tags/*" --force
+          
           cd ..
           rm -rf repo3
           echo "api-data 同步完成 ✅"
