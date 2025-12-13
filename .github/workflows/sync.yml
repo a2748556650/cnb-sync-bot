@@ -1,71 +1,116 @@
-name: Auto Sync SeerAPI to CNB
+name: Smart Sync SeerAPI to CNB
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+    - cron: '0 */4 * * *' # 每4小时检查一次
+  workflow_dispatch:      # 允许手动触发
 
 jobs:
-  sync-all-repos:
+  smart-sync:
     runs-on: ubuntu-latest
-    # 【修改点1】改成 120 分钟（2小时），网速慢也能传完
-    timeout-minutes: 120
+    timeout-minutes: 360  # 设置为6小时，保证全量传输绝对够用
     
     steps:
       - name: Configure Git Network
         run: |
-          # 优化 Git 网络设置
+          # 极致优化网络，防止大文件中断
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
-          # 【修改点2】强制使用 HTTP/1.1，防止 HTTP/2 在大文件上传时卡死
           git config --global http.version HTTP/1.1
+          git config --global compression.codec none
 
-      # ==============================
+      # ========================================================
       # 任务 1: config-sources
-      # ==============================
+      # ========================================================
       - name: Sync config-sources
         run: |
-          echo "正在同步 config-sources..."
-          git clone --mirror https://github.com/SeerAPI/config-sources.git repo1
-          cd repo1
-          git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
-          git push cnb "refs/heads/*:refs/heads/*" --force
-          git push cnb "refs/tags/*:refs/tags/*" --force
-          cd ..
-          rm -rf repo1
-          echo "config-sources 同步完成 ✅"
+          SRC="https://github.com/SeerAPI/config-sources.git"
+          DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
+          
+          echo "正在检查更新..."
+          SRC_ID=$(git ls-remote $SRC main | awk '{print $1}')
+          DEST_ID=$(git ls-remote $DEST main | awk '{print $1}')
+          
+          if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
+            echo "✅ config-sources 已经是最新，跳过。"
+          else
+            echo "🚀 发现更新，开始同步..."
+            # 使用裸克隆 (--bare) 速度快，且保留完整历史解决 shallow update 问题
+            git clone --bare $SRC repo1
+            cd repo1
+            git remote add cnb $DEST
+            # 只推送分支和标签，不推 Pull Request，防止报错
+            git push cnb "refs/heads/*:refs/heads/*" --force
+            git push cnb "refs/tags/*:refs/tags/*" --force
+            cd ..
+            rm -rf repo1
+            echo "同步完成 ✅"
+          fi
 
-      # ==============================
-      # 任务 2: seer-unity-assets (巨大仓库)
-      # ==============================
+      # ========================================================
+      # 任务 2: seer-unity-assets (巨大仓库 - 重点修复)
+      # ========================================================
       - name: Sync seer-unity-assets
         run: |
-          echo "正在同步 seer-unity-assets..."
-          # 依然使用 depth 1 保持最小体积
-          git clone --depth 1 https://github.com/SeerAPI/seer-unity-assets.git repo2
+          SRC="https://github.com/SeerAPI/seer-unity-assets.git"
+          DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
+          # 假设对方主分支是 main，如果是 master 请自行修改
+          BRANCH="main"
           
-          cd repo2
-          git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
+          echo "正在检查大仓库更新..."
+          SRC_ID=$(git ls-remote $SRC $BRANCH | awk '{print $1}')
+          DEST_ID=$(git ls-remote $DEST $BRANCH | awk '{print $1}')
           
-          echo "开始推送到 CNB (可能需要很久，请耐心等待)..."
-          git push cnb main:main --force
+          echo "GitHub: $SRC_ID"
+          echo "CNB   : $DEST_ID"
           
-          cd ..
-          rm -rf repo2
-          echo "seer-unity-assets 同步完成 ✅"
+          if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
+            echo "✅ seer-unity-assets 已经是最新，跳过 (这为你节省了大量时间)。"
+          else
+            echo "🚀 发现更新！因为 CNB 不支持浅克隆，必须进行全量下载..."
+            echo "⏳ 这可能需要 10-30 分钟，请耐心等待..."
+            
+            # 【关键修复】
+            # 1. 去掉 --depth 1 (解决 shallow update not allowed)
+            # 2. 使用 --bare (不解压文件，只下载 .git 数据，比普通 clone 快很多且省空间)
+            git clone --bare $SRC repo2
+            
+            cd repo2
+            git remote add cnb $DEST
+            
+            echo "正在推送到 CNB..."
+            # 强制推送所有分支和标签
+            git push cnb "refs/heads/*:refs/heads/*" --force
+            git push cnb "refs/tags/*:refs/tags/*" --force
+            
+            cd ..
+            rm -rf repo2
+            echo "同步完成 ✅"
+          fi
 
-      # ==============================
+      # ========================================================
       # 任务 3: api-data
-      # ==============================
+      # ========================================================
       - name: Sync api-data
         run: |
-          echo "正在同步 api-data..."
-          git clone --mirror https://github.com/SeerAPI/api-data.git repo3
-          cd repo3
-          git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
-          git push cnb "refs/heads/*:refs/heads/*" --force
-          git push cnb "refs/tags/*:refs/tags/*" --force
-          cd ..
-          rm -rf repo3
-          echo "api-data 同步完成 ✅"
+          SRC="https://github.com/SeerAPI/api-data.git"
+          DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
+          
+          echo "正在检查更新..."
+          SRC_ID=$(git ls-remote $SRC main | awk '{print $1}')
+          DEST_ID=$(git ls-remote $DEST main | awk '{print $1}')
+          
+          if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
+            echo "✅ api-data 已经是最新，跳过。"
+          else
+            echo "🚀 发现更新，开始同步..."
+            git clone --bare $SRC repo3
+            cd repo3
+            git remote add cnb $DEST
+            git push cnb "refs/heads/*:refs/heads/*" --force
+            git push cnb "refs/tags/*:refs/tags/*" --force
+            cd ..
+            rm -rf repo3
+            echo "同步完成 ✅"
+          fi
