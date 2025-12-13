@@ -8,18 +8,21 @@ on:
 jobs:
   sync-all-repos:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 设置超时，如果超过30分钟自动停止，防止卡死
+    # 【修改点1】改成 120 分钟（2小时），网速慢也能传完
+    timeout-minutes: 120
     
     steps:
-      - name: Configure Git for Large Files
+      - name: Configure Git Network
         run: |
-          # 优化 Git 网络设置，防止大文件传输卡死
+          # 优化 Git 网络设置
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
+          # 【修改点2】强制使用 HTTP/1.1，防止 HTTP/2 在大文件上传时卡死
+          git config --global http.version HTTP/1.1
 
       # ==============================
-      # 任务 1: config-sources (小仓库，保持全量同步)
+      # 任务 1: config-sources
       # ==============================
       - name: Sync config-sources
         run: |
@@ -27,7 +30,6 @@ jobs:
           git clone --mirror https://github.com/SeerAPI/config-sources.git repo1
           cd repo1
           git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
-          # 推送分支和标签
           git push cnb "refs/heads/*:refs/heads/*" --force
           git push cnb "refs/tags/*:refs/tags/*" --force
           cd ..
@@ -35,20 +37,18 @@ jobs:
           echo "config-sources 同步完成 ✅"
 
       # ==============================
-      # 任务 2: seer-unity-assets (大仓库，只同步最新版！)
+      # 任务 2: seer-unity-assets (巨大仓库)
       # ==============================
       - name: Sync seer-unity-assets
         run: |
           echo "正在同步 seer-unity-assets..."
-          # 【关键修改】加上 --depth 1，只下载最近一次提交
-          # 并且去掉 --mirror，改为普通克隆
+          # 依然使用 depth 1 保持最小体积
           git clone --depth 1 https://github.com/SeerAPI/seer-unity-assets.git repo2
           
           cd repo2
           git remote add cnb "https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
           
-          # 因为是浅克隆，我们只强制推送 main 分支
-          # 如果对方主分支叫 master，请把下面的 main 改成 master
+          echo "开始推送到 CNB (可能需要很久，请耐心等待)..."
           git push cnb main:main --force
           
           cd ..
@@ -56,7 +56,7 @@ jobs:
           echo "seer-unity-assets 同步完成 ✅"
 
       # ==============================
-      # 任务 3: api-data (通常较小，全量同步)
+      # 任务 3: api-data
       # ==============================
       - name: Sync api-data
         run: |
