@@ -1,151 +1,113 @@
-name: Sync XML to JSON (Complete)
+name: XML to JS (Web Game)
 
 on:
   schedule:
-    - cron: '0 */4 * * *'  # 每4小时执行一次
-  workflow_dispatch:       # 允许手动点击触发
+    - cron: '0 */4 * * *'  # 每4小时检查一次
+  workflow_dispatch:       # 允许手动触发
 
 jobs:
-  sync-jobs:
+  sync-xml-to-js:
     runs-on: ubuntu-latest
-    timeout-minutes: 60    # 超时限制
+    timeout-minutes: 60
     
     steps:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+      - run: pip install xmltodict
 
-      - name: Install Dependencies
-        run: pip install xmltodict
-
-      # ========================================================
-      # 任务 1: config-sources (重点：XML 转 JSON + 智能判断)
-      # ========================================================
-      - name: Sync config-sources (XML->JSON)
+      # ==========================================
+      # 任务: config-sources (XML 转 JS)
+      # ==========================================
+      - name: Sync config-sources to JS
         run: |
-          # --- 配置区 ---
+          # --- 配置 ---
           SRC="https://github.com/SeerAPI/config-sources.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
           
-          echo "🔍 [1/4] 检查版本状态..."
-          
-          # 1. 获取 GitHub 最新指纹 (Commit SHA)
+          # 1. 智能检查更新 (对比 Commit ID)
           LATEST_SHA=$(git ls-remote $SRC main | awk '{print $1}')
-          echo "GitHub 最新版本: $LATEST_SHA"
-
-          # 2. 获取 CNB 上次记录的版本
-          # 先创建一个临时目录用来检查
-          mkdir -p check_version
-          cd check_version
+          
+          # 检查 CNB 里是否有记录
+          mkdir check
+          cd check
           git init
           git remote add origin $DEST
-          # 尝试拉取 source_version.txt，如果失败说明是第一次运行
-          git pull origin main --depth 1 || echo "首次运行或文件不存在"
-          
+          git pull origin main --depth 1 || echo "First run"
           if [ -f source_version.txt ]; then
-            RECORDED_SHA=$(cat source_version.txt)
-            echo "CNB 记录版本:   $RECORDED_SHA"
+             RECORDED=$(cat source_version.txt)
           else
-            RECORDED_SHA="none"
-            echo "CNB 尚无记录"
+             RECORDED="none"
           fi
           cd ..
-          rm -rf check_version
-
-          # 3. 对比判断
-          if [ "$LATEST_SHA" == "$RECORDED_SHA" ]; then
-            echo "✅ 版本一致，无需更新，跳过！"
-          else
-            echo "🚀 发现新版本，开始转换流程..."
-            
-            # 4. 下载 GitHub 源码
-            git clone --depth 1 $SRC work_dir
-            
-            # 5. 创建并运行 Python 转换脚本
-            echo "🔄 [2/4] 正在将 XML 转换为 JSON..."
-            cat > converter.py <<EOF
+          rm -rf check
+          
+          # 如果版本一致，直接停止
+          if [ "$LATEST_SHA" == "$RECORDED" ]; then
+             echo "✅ 版本一致，无需更新。"
+             exit 0
+          fi
+          
+          # 2. 开始转换
+          echo "🚀 发现新版本，开始转换为 JS..."
+          git clone --depth 1 $SRC work_dir
+          
+          # 创建转换脚本
+          cat > converter.py <<EOF
           import os, json, xmltodict
-          # 遍历目录
+          
           for root, dirs, files in os.walk("work_dir"):
-              if '.git' in dirs: dirs.remove('.git') # 忽略git目录
+              if '.git' in dirs: dirs.remove('.git')
               for file in files:
                   if file.endswith(".xml"):
                       try:
                           xml_path = os.path.join(root, file)
-                          json_path = os.path.splitext(xml_path)[0] + ".json"
                           
-                          # 读取 XML 并转为 JSON
+                          # [文件名优化] 去掉 .xml，改为 .js
+                          # config.xml.Item.xml -> config.Item.js
+                          clean_name = file.replace('.xml', '') + ".js"
+                          js_path = os.path.join(root, clean_name)
+                          
+                          # [读取] 去掉 @ 前缀，保持纯净数据
                           with open(xml_path, 'r', encoding='utf-8') as f:
-                              data = xmltodict.parse(f.read())
+                              data = xmltodict.parse(f.read(), attr_prefix='')
                           
-                          # 写入 JSON (indent=None 表示压缩格式，减小体积)
-                          with open(json_path, 'w', encoding='utf-8') as f:
-                              json.dump(data, f, ensure_ascii=False, indent=None)
+                          # [转换] 包装成 export default { ... }
+                          json_str = json.dumps(data, ensure_ascii=False, indent=2)
+                          js_content = "export default " + json_str + ";"
                           
-                          # 【关键】删除原 XML 文件
+                          # [写入] JS 文件
+                          with open(js_path, 'w', encoding='utf-8') as f:
+                              f.write(js_content)
+                          
+                          # [清理] 删除原 XML
                           os.remove(xml_path)
+                          
+                          # 删除旧名文件（如果改名了的话）
+                          if xml_path != os.path.join(root, file):
+                              if os.path.exists(xml_path): os.remove(xml_path)
+
                       except Exception as e:
-                          print(f"Error converting {file}: {e}")
+                          print(f"Error: {file} - {e}")
           EOF
-            # 执行转换
-            python converter.py
-            rm converter.py
-
-            # 6. 更新版本记录文件
-            echo $LATEST_SHA > work_dir/source_version.txt
-            echo "📄 [3/4] 版本记录已更新"
-
-            # 7. 推送 (强制覆盖)
-            echo "📤 [4/4] 推送到 CNB..."
-            cd work_dir
-            # 删除旧的 git 信息，重新初始化，确保完全覆盖
-            rm -rf .git
-            git init
-            git config user.name "CNB Sync Bot"
-            git config user.email "bot@cnb.cool"
-            git checkout -b main
-            
-            git add .
-            git commit -m "Auto sync XML->JSON (Source: $LATEST_SHA)"
-            
-            git remote add cnb $DEST
-            git push cnb main:main --force
-            
-            cd ..
-            rm -rf work_dir
-            echo "✅ config-sources 同步完成！"
-          fi
-
-      # ========================================================
-      # 任务 2: api-data (普通同步，无转换，带智能判断)
-      # ========================================================
-      - name: Sync api-data
-        run: |
-          SRC="https://github.com/SeerAPI/api-data.git"
-          DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
           
-          echo "🔍 检查 api-data 更新..."
-          SRC_ID=$(git ls-remote $SRC main | awk '{print $1}')
-          DEST_ID=$(git ls-remote $DEST main | awk '{print $1}')
-          
-          if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
-             echo "✅ api-data 已是最新，跳过。"
-          else
-             echo "🚀 同步 api-data..."
-             # 使用 bare 克隆解决 shallow update 问题
-             git clone --bare $SRC repo_api
-             cd repo_api
-             git remote add cnb $DEST
-             git push cnb "refs/heads/*:refs/heads/*" --force
-             git push cnb "refs/tags/*:refs/tags/*" --force
-             cd ..
-             rm -rf repo_api
-             echo "✅ api-data 同步完成！"
-          fi
+          python converter.py
+          rm converter.py
 
-      # ========================================================
-      # 任务 3: seer-unity-assets (已根据要求跳过)
-      # ========================================================
-      - name: Sync seer-unity-assets
-        run: echo "⛔️ 已跳过资源仓库同步。"
+          # 3. 推送更新
+          echo $LATEST_SHA > work_dir/source_version.txt
+          
+          cd work_dir
+          rm -rf .git
+          git init
+          git config user.name "Web Sync Bot"
+          git config user.email "bot@cnb.cool"
+          git checkout -b main
+          git add .
+          git commit -m "Auto Update: XML to JS ($LATEST_SHA)"
+          
+          git remote add cnb $DEST
+          git push cnb main:main --force
+          
+          echo "✅ JS 文件同步完成！"
