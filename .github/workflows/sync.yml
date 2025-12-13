@@ -1,12 +1,12 @@
-name: XML to JS (Web Game)
+name: Strict XML to JS Sync
 
 on:
   schedule:
-    - cron: '0 */4 * * *'  # 每4小时检查一次
-  workflow_dispatch:       # 允许手动触发
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 
 jobs:
-  sync-xml-to-js:
+  strict-sync-js:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     
@@ -17,19 +17,14 @@ jobs:
           python-version: '3.x'
       - run: pip install xmltodict
 
-      # ==========================================
-      # 任务: config-sources (XML 转 JS)
-      # ==========================================
-      - name: Sync config-sources to JS
+      - name: Sync config-sources (XML -> JS, Name Kept)
         run: |
-          # --- 配置 ---
           SRC="https://github.com/SeerAPI/config-sources.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
           
-          # 1. 智能检查更新 (对比 Commit ID)
+          # 1. 智能检查
           LATEST_SHA=$(git ls-remote $SRC main | awk '{print $1}')
           
-          # 检查 CNB 里是否有记录
           mkdir check
           cd check
           git init
@@ -43,17 +38,15 @@ jobs:
           cd ..
           rm -rf check
           
-          # 如果版本一致，直接停止
           if [ "$LATEST_SHA" == "$RECORDED" ]; then
-             echo "✅ 版本一致，无需更新。"
+             echo "✅ 版本一致，跳过。"
              exit 0
           fi
           
-          # 2. 开始转换
-          echo "🚀 发现新版本，开始转换为 JS..."
+          # 2. 转换
+          echo "🚀 开始转换 (保留原文件名)..."
           git clone --depth 1 $SRC work_dir
           
-          # 创建转换脚本
           cat > converter.py <<EOF
           import os, json, xmltodict
           
@@ -64,30 +57,27 @@ jobs:
                       try:
                           xml_path = os.path.join(root, file)
                           
-                          # [文件名优化] 去掉 .xml，改为 .js
-                          # config.xml.Item.xml -> config.Item.js
-                          clean_name = file.replace('.xml', '') + ".js"
-                          js_path = os.path.join(root, clean_name)
+                          # 【严格保留原名逻辑】
+                          # 只去掉最后面的 .xml，换成 .js
+                          # 例如: config.xml.Item.xml -> config.xml.Item.js
+                          base_name = os.path.splitext(file)[0]
+                          js_name = base_name + ".js"
+                          js_path = os.path.join(root, js_name)
                           
-                          # [读取] 去掉 @ 前缀，保持纯净数据
+                          # 读取 (无 @ 前缀)
                           with open(xml_path, 'r', encoding='utf-8') as f:
                               data = xmltodict.parse(f.read(), attr_prefix='')
                           
-                          # [转换] 包装成 export default { ... }
+                          # 写入 JS
                           json_str = json.dumps(data, ensure_ascii=False, indent=2)
                           js_content = "export default " + json_str + ";"
                           
-                          # [写入] JS 文件
                           with open(js_path, 'w', encoding='utf-8') as f:
                               f.write(js_content)
                           
-                          # [清理] 删除原 XML
+                          # 删除原 XML
                           os.remove(xml_path)
                           
-                          # 删除旧名文件（如果改名了的话）
-                          if xml_path != os.path.join(root, file):
-                              if os.path.exists(xml_path): os.remove(xml_path)
-
                       except Exception as e:
                           print(f"Error: {file} - {e}")
           EOF
@@ -95,19 +85,19 @@ jobs:
           python converter.py
           rm converter.py
 
-          # 3. 推送更新
+          # 3. 提交
           echo $LATEST_SHA > work_dir/source_version.txt
           
           cd work_dir
           rm -rf .git
           git init
-          git config user.name "Web Sync Bot"
+          git config user.name "Web Bot"
           git config user.email "bot@cnb.cool"
           git checkout -b main
           git add .
-          git commit -m "Auto Update: XML to JS ($LATEST_SHA)"
+          git commit -m "Update JS (Strict Name): $LATEST_SHA"
           
           git remote add cnb $DEST
           git push cnb main:main --force
           
-          echo "✅ JS 文件同步完成！"
+          echo "✅ 完成！文件名已完美保留。"
