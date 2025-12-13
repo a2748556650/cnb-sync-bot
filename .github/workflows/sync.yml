@@ -1,116 +1,151 @@
-name: Smart Sync SeerAPI to CNB
+name: Sync XML to JSON (Complete)
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # 每4小时检查一次
-  workflow_dispatch:      # 允许手动触发
+    - cron: '0 */4 * * *'  # 每4小时执行一次
+  workflow_dispatch:       # 允许手动点击触发
 
 jobs:
-  smart-sync:
+  sync-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 设置为6小时，保证全量传输绝对够用
+    timeout-minutes: 60    # 超时限制
     
     steps:
-      - name: Configure Git Network
-        run: |
-          # 极致优化网络，防止大文件中断
-          git config --global http.postBuffer 524288000
-          git config --global http.lowSpeedLimit 0
-          git config --global http.lowSpeedTime 999999
-          git config --global http.version HTTP/1.1
-          git config --global compression.codec none
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: pip install xmltodict
 
       # ========================================================
-      # 任务 1: config-sources
+      # 任务 1: config-sources (重点：XML 转 JSON + 智能判断)
       # ========================================================
-      - name: Sync config-sources
+      - name: Sync config-sources (XML->JSON)
         run: |
+          # --- 配置区 ---
           SRC="https://github.com/SeerAPI/config-sources.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
           
-          echo "正在检查更新..."
-          SRC_ID=$(git ls-remote $SRC main | awk '{print $1}')
-          DEST_ID=$(git ls-remote $DEST main | awk '{print $1}')
+          echo "🔍 [1/4] 检查版本状态..."
           
-          if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
-            echo "✅ config-sources 已经是最新，跳过。"
+          # 1. 获取 GitHub 最新指纹 (Commit SHA)
+          LATEST_SHA=$(git ls-remote $SRC main | awk '{print $1}')
+          echo "GitHub 最新版本: $LATEST_SHA"
+
+          # 2. 获取 CNB 上次记录的版本
+          # 先创建一个临时目录用来检查
+          mkdir -p check_version
+          cd check_version
+          git init
+          git remote add origin $DEST
+          # 尝试拉取 source_version.txt，如果失败说明是第一次运行
+          git pull origin main --depth 1 || echo "首次运行或文件不存在"
+          
+          if [ -f source_version.txt ]; then
+            RECORDED_SHA=$(cat source_version.txt)
+            echo "CNB 记录版本:   $RECORDED_SHA"
           else
-            echo "🚀 发现更新，开始同步..."
-            # 使用裸克隆 (--bare) 速度快，且保留完整历史解决 shallow update 问题
-            git clone --bare $SRC repo1
-            cd repo1
+            RECORDED_SHA="none"
+            echo "CNB 尚无记录"
+          fi
+          cd ..
+          rm -rf check_version
+
+          # 3. 对比判断
+          if [ "$LATEST_SHA" == "$RECORDED_SHA" ]; then
+            echo "✅ 版本一致，无需更新，跳过！"
+          else
+            echo "🚀 发现新版本，开始转换流程..."
+            
+            # 4. 下载 GitHub 源码
+            git clone --depth 1 $SRC work_dir
+            
+            # 5. 创建并运行 Python 转换脚本
+            echo "🔄 [2/4] 正在将 XML 转换为 JSON..."
+            cat > converter.py <<EOF
+          import os, json, xmltodict
+          # 遍历目录
+          for root, dirs, files in os.walk("work_dir"):
+              if '.git' in dirs: dirs.remove('.git') # 忽略git目录
+              for file in files:
+                  if file.endswith(".xml"):
+                      try:
+                          xml_path = os.path.join(root, file)
+                          json_path = os.path.splitext(xml_path)[0] + ".json"
+                          
+                          # 读取 XML 并转为 JSON
+                          with open(xml_path, 'r', encoding='utf-8') as f:
+                              data = xmltodict.parse(f.read())
+                          
+                          # 写入 JSON (indent=None 表示压缩格式，减小体积)
+                          with open(json_path, 'w', encoding='utf-8') as f:
+                              json.dump(data, f, ensure_ascii=False, indent=None)
+                          
+                          # 【关键】删除原 XML 文件
+                          os.remove(xml_path)
+                      except Exception as e:
+                          print(f"Error converting {file}: {e}")
+          EOF
+            # 执行转换
+            python converter.py
+            rm converter.py
+
+            # 6. 更新版本记录文件
+            echo $LATEST_SHA > work_dir/source_version.txt
+            echo "📄 [3/4] 版本记录已更新"
+
+            # 7. 推送 (强制覆盖)
+            echo "📤 [4/4] 推送到 CNB..."
+            cd work_dir
+            # 删除旧的 git 信息，重新初始化，确保完全覆盖
+            rm -rf .git
+            git init
+            git config user.name "CNB Sync Bot"
+            git config user.email "bot@cnb.cool"
+            git checkout -b main
+            
+            git add .
+            git commit -m "Auto sync XML->JSON (Source: $LATEST_SHA)"
+            
             git remote add cnb $DEST
-            # 只推送分支和标签，不推 Pull Request，防止报错
-            git push cnb "refs/heads/*:refs/heads/*" --force
-            git push cnb "refs/tags/*:refs/tags/*" --force
+            git push cnb main:main --force
+            
             cd ..
-            rm -rf repo1
-            echo "同步完成 ✅"
+            rm -rf work_dir
+            echo "✅ config-sources 同步完成！"
           fi
 
       # ========================================================
-      # 任务 2: seer-unity-assets (巨大仓库 - 重点修复)
-      # ========================================================
-      - name: Sync seer-unity-assets
-        run: |
-          SRC="https://github.com/SeerAPI/seer-unity-assets.git"
-          DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
-          # 假设对方主分支是 main，如果是 master 请自行修改
-          BRANCH="main"
-          
-          echo "正在检查大仓库更新..."
-          SRC_ID=$(git ls-remote $SRC $BRANCH | awk '{print $1}')
-          DEST_ID=$(git ls-remote $DEST $BRANCH | awk '{print $1}')
-          
-          echo "GitHub: $SRC_ID"
-          echo "CNB   : $DEST_ID"
-          
-          if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
-            echo "✅ seer-unity-assets 已经是最新，跳过 (这为你节省了大量时间)。"
-          else
-            echo "🚀 发现更新！因为 CNB 不支持浅克隆，必须进行全量下载..."
-            echo "⏳ 这可能需要 10-30 分钟，请耐心等待..."
-            
-            # 【关键修复】
-            # 1. 去掉 --depth 1 (解决 shallow update not allowed)
-            # 2. 使用 --bare (不解压文件，只下载 .git 数据，比普通 clone 快很多且省空间)
-            git clone --bare $SRC repo2
-            
-            cd repo2
-            git remote add cnb $DEST
-            
-            echo "正在推送到 CNB..."
-            # 强制推送所有分支和标签
-            git push cnb "refs/heads/*:refs/heads/*" --force
-            git push cnb "refs/tags/*:refs/tags/*" --force
-            
-            cd ..
-            rm -rf repo2
-            echo "同步完成 ✅"
-          fi
-
-      # ========================================================
-      # 任务 3: api-data
+      # 任务 2: api-data (普通同步，无转换，带智能判断)
       # ========================================================
       - name: Sync api-data
         run: |
           SRC="https://github.com/SeerAPI/api-data.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
           
-          echo "正在检查更新..."
+          echo "🔍 检查 api-data 更新..."
           SRC_ID=$(git ls-remote $SRC main | awk '{print $1}')
           DEST_ID=$(git ls-remote $DEST main | awk '{print $1}')
           
           if [ "$SRC_ID" == "$DEST_ID" ] && [ -n "$SRC_ID" ]; then
-            echo "✅ api-data 已经是最新，跳过。"
+             echo "✅ api-data 已是最新，跳过。"
           else
-            echo "🚀 发现更新，开始同步..."
-            git clone --bare $SRC repo3
-            cd repo3
-            git remote add cnb $DEST
-            git push cnb "refs/heads/*:refs/heads/*" --force
-            git push cnb "refs/tags/*:refs/tags/*" --force
-            cd ..
-            rm -rf repo3
-            echo "同步完成 ✅"
+             echo "🚀 同步 api-data..."
+             # 使用 bare 克隆解决 shallow update 问题
+             git clone --bare $SRC repo_api
+             cd repo_api
+             git remote add cnb $DEST
+             git push cnb "refs/heads/*:refs/heads/*" --force
+             git push cnb "refs/tags/*:refs/tags/*" --force
+             cd ..
+             rm -rf repo_api
+             echo "✅ api-data 同步完成！"
           fi
+
+      # ========================================================
+      # 任务 3: seer-unity-assets (已根据要求跳过)
+      # ========================================================
+      - name: Sync seer-unity-assets
+        run: echo "⛔️ 已跳过资源仓库同步。"
