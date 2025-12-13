@@ -1,35 +1,37 @@
-name: Sync 3 Repos (Mixed Logic)
+name: Sync 3 Repos Mixed Logic
 
 on:
   schedule:
-    - cron: '0 */4 * * *'  # 每4小时运行
-  workflow_dispatch:       # 手动触发
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 
 jobs:
   sync-all:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6小时超时，防止大文件传不完
+    timeout-minutes: 360
     
     steps:
       - name: Setup Environment
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
-      - run: pip install xmltodict
+          
+      - name: Install Dependencies
+        run: pip install xmltodict
 
       # ========================================================
-      # 仓库 1: config-sources 
-      # 【特殊处理】：XML转JS + 缩短文件名 + 智能检查
+      # 任务 1: config-sources
+      # 逻辑: XML转JS + 缩短文件名 + 智能检查
       # ========================================================
-      - name: [1/3] Sync config-sources (Convert & Rename)
+      - name: Sync config-sources (Convert and Rename)
         run: |
           SRC="https://github.com/SeerAPI/config-sources.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
           
-          echo "🔍 检查 config-sources 更新..."
+          echo "Checking config-sources update..."
           LATEST_SHA=$(git ls-remote $SRC main | awk '{print $1}')
           
-          # 检查 CNB 里的版本记录文件
+          # 检查 CNB 里的版本记录
           mkdir check_1
           cd check_1
           git init
@@ -40,12 +42,12 @@ jobs:
           rm -rf check_1
           
           if [ "$LATEST_SHA" == "$RECORDED" ]; then
-             echo "✅ config-sources 版本一致，跳过。"
+             echo "Config-sources match, skipping."
           else
-             echo "🚀 config-sources 发现更新，开始转换..."
+             echo "Config-sources update found, processing..."
              git clone --depth 1 $SRC work_dir_1
              
-             # --- Python 转换脚本 (含重命名逻辑) ---
+             # --- 生成 Python 转换脚本 ---
              cat > converter.py <<EOF
           import os, json, xmltodict
           for root, dirs, files in os.walk("work_dir_1"):
@@ -72,7 +74,7 @@ jobs:
                           
                           # 4. 清理旧文件
                           os.remove(xml_path)
-                          if js_path != xml_path: # 如果新老路径不一样，检查有没有残留的旧同名文件
+                          if js_path != xml_path:
                               old_xml_name_js = os.path.splitext(xml_path)[0] + ".js"
                               if os.path.exists(old_xml_name_js) and old_xml_name_js != js_path:
                                   os.remove(old_xml_name_js)
@@ -80,6 +82,7 @@ jobs:
                       except Exception as e:
                           print(f"Error: {file} - {e}")
           EOF
+          
              # 运行转换
              python converter.py
              rm converter.py
@@ -100,28 +103,26 @@ jobs:
              git push cnb main:main --force
              cd ..
              rm -rf work_dir_1
-             echo "✅ config-sources 完成"
+             echo "Config-sources done."
           fi
 
       # ========================================================
-      # 仓库 2: api-data
-      # 【普通同步】：原样拉取 + 检查更新
+      # 任务 2: api-data
+      # 逻辑: 原样拉取 + 检查更新
       # ========================================================
-      - name: [2/3] Sync api-data (Direct Mirror)
+      - name: Sync api-data (Direct Mirror)
         run: |
           SRC="https://github.com/SeerAPI/api-data.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
           
-          echo "🔍 检查 api-data 更新..."
-          # 因为是原样同步，可以直接对比 GitHub 和 CNB 的 Commit ID
+          echo "Checking api-data update..."
           SRC_SHA=$(git ls-remote $SRC main | awk '{print $1}')
           DEST_SHA=$(git ls-remote $DEST main | awk '{print $1}')
           
           if [ "$SRC_SHA" == "$DEST_SHA" ] && [ -n "$SRC_SHA" ]; then
-             echo "✅ api-data 已是最新，跳过。"
+             echo "Api-data match, skipping."
           else
-             echo "🚀 api-data 发现更新，开始同步..."
-             # 使用 bare 克隆，速度最快，完美保留原文件
+             echo "Api-data update found, syncing..."
              git clone --bare $SRC repo_api
              cd repo_api
              git remote add cnb $DEST
@@ -129,33 +130,28 @@ jobs:
              git push cnb "refs/tags/*:refs/tags/*" --force
              cd ..
              rm -rf repo_api
-             echo "✅ api-data 完成"
+             echo "Api-data done."
           fi
 
       # ========================================================
-      # 仓库 3: seer-unity-assets
-      # 【普通同步】：原样拉取 + 检查更新 (大文件)
+      # 任务 3: seer-unity-assets
+      # 逻辑: 原样拉取 + 检查更新 (大文件)
       # ========================================================
-      - name: [3/3] Sync seer-unity-assets (Direct Mirror)
+      - name: Sync seer-unity-assets (Direct Mirror)
         run: |
           SRC="https://github.com/SeerAPI/seer-unity-assets.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
-          # 注意：请确认该仓库主分支是 main 还是 master，这里假设 main
           BRANCH="main"
           
-          echo "🔍 检查 seer-unity-assets 更新..."
+          echo "Checking assets update..."
           SRC_SHA=$(git ls-remote $SRC $BRANCH | awk '{print $1}')
           DEST_SHA=$(git ls-remote $DEST $BRANCH | awk '{print $1}')
           
           if [ "$SRC_SHA" == "$DEST_SHA" ] && [ -n "$SRC_SHA" ]; then
-             echo "✅ assets 已是最新，跳过。"
+             echo "Assets match, skipping."
           else
-             echo "🚀 assets 发现更新，开始同步 (这可能需要一点时间)..."
-             
-             # 针对大文件仓库的网络优化
+             echo "Assets update found, syncing..."
              git config --global http.postBuffer 524288000
-             
-             # 使用 bare 克隆避免下载文件到工作区，节省空间和时间
              git clone --bare $SRC repo_assets
              cd repo_assets
              git remote add cnb $DEST
@@ -163,5 +159,5 @@ jobs:
              git push cnb "refs/tags/*:refs/tags/*" --force
              cd ..
              rm -rf repo_assets
-             echo "✅ assets 完成"
+             echo "Assets done."
           fi
