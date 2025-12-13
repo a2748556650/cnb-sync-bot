@@ -1,4 +1,4 @@
-name: Strict XML to JS Sync
+name: XML to JS (Smart Rename)
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  strict-sync-js:
+  sync-smart-rename:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     
@@ -17,7 +17,7 @@ jobs:
           python-version: '3.x'
       - run: pip install xmltodict
 
-      - name: Sync config-sources (XML -> JS, Name Kept)
+      - name: Sync config-sources (Smart Rename JS)
         run: |
           SRC="https://github.com/SeerAPI/config-sources.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/config-sources.git"
@@ -44,7 +44,7 @@ jobs:
           fi
           
           # 2. 转换
-          echo "🚀 开始转换 (保留原文件名)..."
+          echo "🚀 开始转换 (智能提取简短文件名)..."
           git clone --depth 1 $SRC work_dir
           
           cat > converter.py <<EOF
@@ -57,11 +57,17 @@ jobs:
                       try:
                           xml_path = os.path.join(root, file)
                           
-                          # 【严格保留原名逻辑】
-                          # 只去掉最后面的 .xml，换成 .js
-                          # 例如: config.xml.Item.xml -> config.xml.Item.js
-                          base_name = os.path.splitext(file)[0]
-                          js_name = base_name + ".js"
+                          # ==========================================
+                          # 【修改点】智能重命名逻辑
+                          # 1. os.path.splitext(file)[0] 拿到 "config.xml.Item"
+                          # 2. .split('.')[-1]           拿到 "Item"
+                          # 3. + ".js"                   变成 "Item.js"
+                          # ==========================================
+                          
+                          file_no_ext = os.path.splitext(file)[0]
+                          short_name = file_no_ext.split('.')[-1]
+                          js_name = short_name + ".js"
+                          
                           js_path = os.path.join(root, js_name)
                           
                           # 读取 (无 @ 前缀)
@@ -77,6 +83,12 @@ jobs:
                           
                           # 删除原 XML
                           os.remove(xml_path)
+                          
+                          # (保险措施) 如果生成的文件名和去掉.xml后的名字不一样，
+                          # 比如原逻辑会生成 config.xml.Item.js，现在我们生成 Item.js
+                          # 理论上这是新环境不需要清理旧JS，但为了逻辑严谨保留清理逻辑
+                          if xml_path != os.path.join(root, file):
+                              if os.path.exists(xml_path): os.remove(xml_path)
                           
                       except Exception as e:
                           print(f"Error: {file} - {e}")
@@ -95,9 +107,9 @@ jobs:
           git config user.email "bot@cnb.cool"
           git checkout -b main
           git add .
-          git commit -m "Update JS (Strict Name): $LATEST_SHA"
+          git commit -m "Update JS (Smart Name): $LATEST_SHA"
           
           git remote add cnb $DEST
           git push cnb main:main --force
           
-          echo "✅ 完成！文件名已完美保留。"
+          echo "✅ 完成！文件名已缩短并转换为 JS。"
