@@ -16,6 +16,7 @@ jobs:
         with:
           python-version: '3.x'
       - run: pip install xmltodict
+
       # ========================================================
       # 仓库 1: config-sources 
       # 【特殊处理】：XML转JS + 缩短文件名 + 智能检查
