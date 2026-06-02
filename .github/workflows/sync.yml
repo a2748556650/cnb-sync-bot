@@ -20,7 +20,7 @@ jobs:
         run: pip install xmltodict
 
       # ========================================================
-      # 任务 1: config-sources (加入 version.txt 自动递增逻辑)
+      # 任务 1: config-sources (XML转JS + 自动 version.txt)
       # ========================================================
       - name: Sync config-sources (Convert and Rename)
         run: |
@@ -36,11 +36,8 @@ jobs:
           git init
           git remote add origin $DEST
           git pull origin main --depth 1 || echo "First run"
-          
-          # 读取历史记录，若不存在则赋予默认值
           if [ -f source_version.txt ]; then RECORDED=$(cat source_version.txt); else RECORDED="none"; fi
           if [ -f version.txt ]; then CURRENT_VER=$(cat version.txt); else CURRENT_VER="0.1"; fi
-          
           cd ..
           rm -rf check_1
           
@@ -93,12 +90,10 @@ jobs:
              # 计算新版本号
              if [ "$RECORDED" == "none" ]; then
                 NEW_VER="0.1"
-                echo "First run: initialized version to $NEW_VER"
              else
-                # 使用 awk 精确计算浮点数加法，确保只保留一位小数
                 NEW_VER=$(awk -v ver="$CURRENT_VER" 'BEGIN { printf "%.1f", ver + 0.1 }')
-                echo "Version incremented: $CURRENT_VER -> $NEW_VER"
              fi
+             echo "Updating version from $CURRENT_VER to $NEW_VER"
              
              # 更新版本记录与版本号文件
              echo $LATEST_SHA > work_dir_1/source_version.txt
@@ -112,7 +107,7 @@ jobs:
              git config user.email "bot@cnb.cool"
              git checkout -b main
              git add .
-             git commit -m "Update JS: $LATEST_SHA (version: $NEW_VER)"
+             git commit -m "Update JS: $LATEST_SHA (version $NEW_VER)"
              git remote add cnb $DEST
              git push cnb main:main --force
              cd ..
@@ -121,57 +116,74 @@ jobs:
           fi
 
       # ========================================================
-      # 任务 2: api-data
-      # 逻辑: 原样拉取 + 检查更新
+      # 任务 2: api-data (原样拉取 + 自动 version.txt)
       # ========================================================
-      - name: Sync api-data (Direct Mirror)
+      - name: Sync api-data (with version.txt)
         run: |
           SRC="https://github.com/SeerAPI/api-data.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/api-data.git"
           
           echo "Checking api-data update..."
-          SRC_SHA=$(git ls-remote $SRC main | awk '{print $1}')
-          DEST_SHA=$(git ls-remote $DEST main | awk '{print $1}')
+          LATEST_SHA=$(git ls-remote $SRC main | awk '{print $1}')
           
-          if [ "$SRC_SHA" == "$DEST_SHA" ] && [ -n "$SRC_SHA" ]; then
+          # 检查 CNB 里的版本记录
+          mkdir check_2
+          cd check_2
+          git init
+          git remote add origin $DEST
+          git pull origin main --depth 1 || echo "First run"
+          if [ -f source_version.txt ]; then RECORDED=$(cat source_version.txt); else RECORDED="none"; fi
+          if [ -f version.txt ]; then CURRENT_VER=$(cat version.txt); else CURRENT_VER="0.1"; fi
+          cd ..
+          rm -rf check_2
+          
+          if [ "$LATEST_SHA" == "$RECORDED" ]; then
              echo "Api-data match, skipping."
           else
-             echo "Api-data update found, syncing..."
-             git clone --bare $SRC repo_api
-             cd repo_api
+             echo "Api-data update found, syncing with versioning..."
+             git clone --depth 1 $SRC work_dir_2
+             cd work_dir_2
+             
+             # 计算新版本号
+             if [ "$RECORDED" == "none" ]; then
+                NEW_VER="0.1"
+             else
+                NEW_VER=$(awk -v ver="$CURRENT_VER" 'BEGIN { printf "%.1f", ver + 0.1 }')
+             fi
+             echo "Updating version from $CURRENT_VER to $NEW_VER"
+             
+             # 写入版本信息
+             echo $LATEST_SHA > source_version.txt
+             echo $NEW_VER > version.txt
+             
+             # 提交并推送至 CNB
+             git config user.name "Web Bot"
+             git config user.email "bot@cnb.cool"
+             git add source_version.txt version.txt
+             git commit -m "Mirror update: $LATEST_SHA (version $NEW_VER)"
              git remote add cnb $DEST
-             git push cnb "refs/heads/*:refs/heads/*" --force
-             git push cnb "refs/tags/*:refs/tags/*" --force
+             git push cnb main:main --force
              cd ..
-             rm -rf repo_api
+             rm -rf work_dir_2
              echo "Api-data done."
           fi
 
       # ========================================================
-      # 任务 3: seer-unity-assets
-      # 逻辑: 原样拉取 + 检查更新 (大文件)
+      # 任务 3: seer-unity-assets (原样拉取 + 自动 version.txt + LFS优化)
       # ========================================================
-      - name: Sync seer-unity-assets (Direct Mirror)
+      - name: Sync seer-unity-assets (with version.txt)
         run: |
           SRC="https://github.com/SeerAPI/seer-unity-assets.git"
           DEST="https://oauth2:${{ secrets.CNB_TOKEN }}@cnb.cool/seer_unity/seer-unity-assets.git"
           BRANCH="main"
           
           echo "Checking assets update..."
-          SRC_SHA=$(git ls-remote $SRC $BRANCH | awk '{print $1}')
-          DEST_SHA=$(git ls-remote $DEST $BRANCH | awk '{print $1}')
+          LATEST_SHA=$(git ls-remote $SRC $BRANCH | awk '{print $1}')
           
-          if [ "$SRC_SHA" == "$DEST_SHA" ] && [ -n "$SRC_SHA" ]; then
-             echo "Assets match, skipping."
-          else
-             echo "Assets update found, syncing..."
-             git config --global http.postBuffer 524288000
-             git clone --bare $SRC repo_assets
-             cd repo_assets
-             git remote add cnb $DEST
-             git push cnb "refs/heads/*:refs/heads/*" --force
-             git push cnb "refs/tags/*:refs/tags/*" --force
-             cd ..
-             rm -rf repo_assets
-             echo "Assets done."
-          fi
+          # 检查 CNB 里的版本记录
+          mkdir check_3
+          cd check_3
+          git init
+          git remote add origin $DEST
+          git pull origin $BRANCH --depth 1 || echo "First run"
+          if [ -f sour
