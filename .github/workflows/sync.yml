@@ -37,14 +37,21 @@ jobs:
           git remote add origin $DEST
           git pull origin main --depth 1 || echo "First run"
           if [ -f source_version.txt ]; then RECORDED=$(cat source_version.txt); else RECORDED="none"; fi
-          if [ -f version.txt ]; then CURRENT_VER=$(cat version.txt); else CURRENT_VER="0.1"; fi
+          if [ -f version.txt ]; then 
+             CURRENT_VER=$(cat version.txt)
+             HAS_VERSION="yes"
+          else 
+             CURRENT_VER="0.1"
+             HAS_VERSION="no"
+          fi
           cd ..
           rm -rf check_1
           
-          if [ "$LATEST_SHA" == "$RECORDED" ]; then
-             echo "Config-sources match, skipping."
+          # 如果 SHA 一致，且已经存在版本文件，则跳过
+          if [ "$LATEST_SHA" == "$RECORDED" ] && [ "$HAS_VERSION" == "yes" ]; then
+             echo "Config-sources match and version.txt exists, skipping."
           else
-             echo "Config-sources update found, processing..."
+             echo "Config-sources update found or version.txt missing, processing..."
              git clone --depth 1 $SRC work_dir_1
              
              # --- 生成 Python 转换脚本 ---
@@ -87,8 +94,8 @@ jobs:
              python converter.py
              rm converter.py
              
-             # 计算新版本号
-             if [ "$RECORDED" == "none" ]; then
+             # 计算新版本号：如果之前没有版本文件，则直接初始化为 0.1
+             if [ "$HAS_VERSION" == "no" ]; then
                 NEW_VER="0.1"
              else
                 NEW_VER=$(awk -v ver="$CURRENT_VER" 'BEGIN { printf "%.1f", ver + 0.1 }')
@@ -133,19 +140,26 @@ jobs:
           git remote add origin $DEST
           git pull origin main --depth 1 || echo "First run"
           if [ -f source_version.txt ]; then RECORDED=$(cat source_version.txt); else RECORDED="none"; fi
-          if [ -f version.txt ]; then CURRENT_VER=$(cat version.txt); else CURRENT_VER="0.1"; fi
+          if [ -f version.txt ]; then 
+             CURRENT_VER=$(cat version.txt)
+             HAS_VERSION="yes"
+          else 
+             CURRENT_VER="0.1"
+             HAS_VERSION="no"
+          fi
           cd ..
           rm -rf check_2
           
-          if [ "$LATEST_SHA" == "$RECORDED" ]; then
-             echo "Api-data match, skipping."
+          # 如果 SHA 一致，且已经存在版本文件，则跳过
+          if [ "$LATEST_SHA" == "$RECORDED" ] && [ "$HAS_VERSION" == "yes" ]; then
+             echo "Api-data match and version.txt exists, skipping."
           else
-             echo "Api-data update found, syncing with versioning..."
+             echo "Api-data update found or version.txt missing, syncing..."
              git clone --depth 1 $SRC work_dir_2
              cd work_dir_2
              
-             # 计算新版本号
-             if [ "$RECORDED" == "none" ]; then
+             # 计算新版本号：如果之前没有版本文件，则直接初始化为 0.1
+             if [ "$HAS_VERSION" == "no" ]; then
                 NEW_VER="0.1"
              else
                 NEW_VER=$(awk -v ver="$CURRENT_VER" 'BEGIN { printf "%.1f", ver + 0.1 }')
@@ -187,24 +201,31 @@ jobs:
           git remote add origin $DEST
           git pull origin $BRANCH --depth 1 || echo "First run"
           if [ -f source_version.txt ]; then RECORDED=$(cat source_version.txt); else RECORDED="none"; fi
-          if [ -f version.txt ]; then CURRENT_VER=$(cat version.txt); else CURRENT_VER="0.1"; fi
+          if [ -f version.txt ]; then 
+             CURRENT_VER=$(cat version.txt)
+             HAS_VERSION="yes"
+          else 
+             CURRENT_VER="0.1"
+             HAS_VERSION="no"
+          fi
           cd ..
           rm -rf check_3
           
-          if [ "$LATEST_SHA" == "$RECORDED" ]; then
-             echo "Assets match, skipping."
+          # 如果 SHA 一致，且已经存在版本文件，则跳过
+          if [ "$LATEST_SHA" == "$RECORDED" ] && [ "$HAS_VERSION" == "yes" ]; then
+             echo "Assets match and version.txt exists, skipping."
           else
-             echo "Assets update found, syncing with versioning..."
+             echo "Assets update found or version.txt missing, syncing..."
              git config --global http.postBuffer 524288000
              
-             # 【关键优化】设置跳过 LFS 实体文件下载，只拉取指针，防止拉取超大资源文件导致任务超时
+             # 开启 LFS 指针跳过逻辑
              export GIT_LFS_SKIP_SMUDGE=1
              
              git clone --depth 1 --branch $BRANCH $SRC work_dir_3
              cd work_dir_3
              
-             # 计算新版本号
-             if [ "$RECORDED" == "none" ]; then
+             # 计算新版本号：如果之前没有版本文件，则直接初始化为 0.1
+             if [ "$HAS_VERSION" == "no" ]; then
                 NEW_VER="0.1"
              else
                 NEW_VER=$(awk -v ver="$CURRENT_VER" 'BEGIN { printf "%.1f", ver + 0.1 }')
