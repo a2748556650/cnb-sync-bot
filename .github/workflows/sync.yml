@@ -186,4 +186,43 @@ jobs:
           git init
           git remote add origin $DEST
           git pull origin $BRANCH --depth 1 || echo "First run"
-          if [ -f sour
+          if [ -f source_version.txt ]; then RECORDED=$(cat source_version.txt); else RECORDED="none"; fi
+          if [ -f version.txt ]; then CURRENT_VER=$(cat version.txt); else CURRENT_VER="0.1"; fi
+          cd ..
+          rm -rf check_3
+          
+          if [ "$LATEST_SHA" == "$RECORDED" ]; then
+             echo "Assets match, skipping."
+          else
+             echo "Assets update found, syncing with versioning..."
+             git config --global http.postBuffer 524288000
+             
+             # 【关键优化】设置跳过 LFS 实体文件下载，只拉取指针，防止拉取超大资源文件导致任务超时
+             export GIT_LFS_SKIP_SMUDGE=1
+             
+             git clone --depth 1 --branch $BRANCH $SRC work_dir_3
+             cd work_dir_3
+             
+             # 计算新版本号
+             if [ "$RECORDED" == "none" ]; then
+                NEW_VER="0.1"
+             else
+                NEW_VER=$(awk -v ver="$CURRENT_VER" 'BEGIN { printf "%.1f", ver + 0.1 }')
+             fi
+             echo "Updating version from $CURRENT_VER to $NEW_VER"
+             
+             # 写入版本信息
+             echo $LATEST_SHA > source_version.txt
+             echo $NEW_VER > version.txt
+             
+             # 提交并推送至 CNB
+             git config user.name "Web Bot"
+             git config user.email "bot@cnb.cool"
+             git add source_version.txt version.txt
+             git commit -m "Mirror update: $LATEST_SHA (version $NEW_VER)"
+             git remote add cnb $DEST
+             git push cnb $BRANCH:$BRANCH --force
+             cd ..
+             rm -rf work_dir_3
+             echo "Assets done."
+          fi
